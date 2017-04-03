@@ -58,10 +58,29 @@ CONST_IJ_POLYGON,\
     CONST_IJ_POINT\
     = range(11)
 
+# https://docs.oracle.com/javase/7/docs/api/constant-values.html#java.awt.geom.PathIterator
+
+CONST_PATH_ITERATOR_SEG_MOVETO, \
+    CONST_PATH_ITERATOR_SEG_LINETO, \
+    CONST_PATH_ITERATOR_SEG_QUADTO, \
+    CONST_PATH_ITERATOR_SEG_CUBICTO, \
+    CONST_PATH_ITERATOR_SEG_CLOSE = range(5)
 
 # https://github.com/imagej/imagej1/blob/86280b4e0756d1f4c0fcb44ac7410138e8e6a6d8/ij/io/RoiDecoder.java
 
-IMAGEJ_ROI_HEADER = [
+CONST_IJ_OPT_SPLINE_FIT,\
+    CONST_IJ_OPT_DOUBLE_HEADED, \
+    CONST_IJ_OPT_OUTLINE, \
+    CONST_IJ_OPT_OVERLAY_LABELS,\
+    CONST_IJ_OPT_OVERLAY_NAMES,\
+    CONST_IJ_OPT_OVERLAY_BACKGROUNDS,\
+    CONST_IJ_OPT_OVERLAY_BOLD, \
+    CONST_IJ_OPT_SUB_PIXEL_RESOLUTION,\
+    CONST_IJ_OPT_DRAW_OFFSET,\
+    CONST_IJ_OPT_ZERO_TRANSPARENT,\
+    = [2**bits for bits in range(10)]
+
+IMAGEJ_ROI_HEADER_BEGIN = [
     ('_iout', '4a1'),  # always b'Iout'
     ('version', 'i2'),
     ('roi_type', 'i1'),
@@ -70,11 +89,23 @@ IMAGEJ_ROI_HEADER = [
     ('left', 'i2'),
     ('bottom', 'i2'),
     ('right', 'i2'),
-    ('n_coordinates', 'i2'),
+    ('n_coordinates', 'i2')]
+
+IMAGEJ_ROI_HEADER_PIXEL_RESOLUTION_MIDDLE = [
     ('x1', 'i4'),
     ('y1', 'i4'),
     ('x2', 'i4'),
     ('y2', 'i4'),
+]
+
+IMAGEJ_ROI_HEADER_SUB_PIXEL_RESOLUTION_MIDDLE = [
+    ('x1', 'f4'),
+    ('y1', 'f4'),
+    ('x2', 'f4'),
+    ('y2', 'f4'),
+]
+
+IMAGEJ_ROI_HEADER_END = [
     ('stroke_width', 'i2'),
     ('shape_roi_size', 'i4'),
     ('stroke_color', 'i4'),
@@ -87,6 +118,14 @@ IMAGEJ_ROI_HEADER = [
     ('position', 'i4'),
     ('header2_offset', 'i4'),
 ]
+
+IMAGEJ_ROI_HEADER = IMAGEJ_ROI_HEADER_BEGIN +\
+                    IMAGEJ_ROI_HEADER_PIXEL_RESOLUTION_MIDDLE +\
+                    IMAGEJ_ROI_HEADER_END
+
+IMAGEJ_ROI_HEADER_SUB_PIXEL = IMAGEJ_ROI_HEADER_BEGIN +\
+                              IMAGEJ_ROI_HEADER_SUB_PIXEL_RESOLUTION_MIDDLE +\
+                              IMAGEJ_ROI_HEADER_END
 
 IMAGEJ_ROI_HEADER2 = [
     ('_nil', 'i4'),
@@ -134,8 +173,37 @@ IMAGEJ_SUPPORTED_OVERLAYS = {
     }
 
 
+def shape_array_to_coordinates(shape_array):
+    result = []
+    n = 0
+
+    jump = [float('nan'), float('nan')]
+
+    last_moveto = 0
+
+    while n < len(shape_array):
+        op = int(shape_array[n])
+        if op == CONST_PATH_ITERATOR_SEG_MOVETO:
+            if n > 0:
+                result.append(jump)
+            result.append([shape_array[n + 1], shape_array[n + 2]])
+            last_moveto = len(result)
+            n += 3
+        elif op == CONST_PATH_ITERATOR_SEG_LINETO:
+            result.append([shape_array[n + 1], shape_array[n + 2]])
+            n += 3
+        elif op == CONST_PATH_ITERATOR_SEG_CLOSE:
+            result.append(result[last_moveto])
+            n += 1
+        elif op == CONST_PATH_ITERATOR_SEG_QUADTO or op == CONST_PATH_ITERATOR_SEG_CUBICTO:
+            raise RuntimeError("Unsupported PathIterator commands in ShapeRoi")
+
+    return np.array(result)
+
+
 def imagej_parse_overlay(data):
     header = new_record(IMAGEJ_ROI_HEADER, data=data)
+    headerf = new_record(IMAGEJ_ROI_HEADER_SUB_PIXEL, data=data)
 
     header2 = new_record(IMAGEJ_ROI_HEADER2, data=data, offset=header.header2_offset)
 
@@ -144,15 +212,52 @@ def imagej_parse_overlay(data):
     else:
         name = ''
 
-    overlay = dict(name=name, coordinates=None)
+    sub_pixel_resolution = (header.options & CONST_IJ_OPT_SUB_PIXEL_RESOLUTION) and header.version >= 222
+    draw_offset = sub_pixel_resolution and (header.options & CONST_IJ_OPT_DRAW_OFFSET)
+
+    if sub_pixel_resolution:
+        header = headerf
+
+    overlay = dict(
+        name=name,
+        coordinates=None,
+        sub_pixel_resolution=sub_pixel_resolution,
+        draw_offset=draw_offset,
+    )
 
     if header.roi_type in IMAGEJ_SUPPORTED_OVERLAYS:
+        dtype_to_fetch = np.dtype(np.float32) if sub_pixel_resolution else np.dtype(np.int16)
+
+        coordinates_to_fetch = header.n_coordinates
+
+        if sub_pixel_resolution:
+            coordinate_offset = coordinates_to_fetch * np.uint16.itemsize * 2
+        else:
+            coordinate_offset = 0
+
         overlay['coordinates'] = np.ndarray(
-            shape=(header.n_coordinates, 2),
-            dtype=np.dtype(np.int16).newbyteorder('>'),
-            buffer=data[header.itemsize:header.itemsize + 2 * 2 * header.n_coordinates],
+            shape=(coordinates_to_fetch, 2),
+            dtype=dtype_to_fetch.newbyteorder('>'),
+            buffer=data[
+                   header.itemsize + coordinate_offset:
+                   header.itemsize + coordinate_offset + 2 * dtype_to_fetch.itemsize * coordinates_to_fetch
+                   ],
             order='F'
         ).copy()
+
+    elif header.roi_type == CONST_IJ_RECT and header.shape_roi_size > 0:
+        # composite / shape ROI ... not pretty to parse
+        shape_array = np.ndarray(
+            shape=header.shape_roi_size,
+            dtype=np.dtype(np.float32).newbyteorder('>'),
+            buffer=data[
+                   header.itemsize:
+                   header.itemsize + np.dtype(np.float32).itemsize * header.shape_roi_size
+                   ]
+        ).copy()
+
+        overlay['coordinates'] = shape_array_to_coordinates(shape_array)
+        overlay['coordinates'] -= [header.left, header.top]
 
     for to_insert in [header, header2]:
         for key in to_insert.dtype.names:
