@@ -215,6 +215,8 @@ def imagej_parse_overlay(data):
     sub_pixel_resolution = (header.options & CONST_IJ_OPT_SUB_PIXEL_RESOLUTION) and header.version >= 222
     draw_offset = sub_pixel_resolution and (header.options & CONST_IJ_OPT_DRAW_OFFSET)
 
+    sub_pixel_resolution = False
+
     if sub_pixel_resolution:
         header = headerf
 
@@ -231,7 +233,7 @@ def imagej_parse_overlay(data):
         coordinates_to_fetch = header.n_coordinates
 
         if sub_pixel_resolution:
-            coordinate_offset = coordinates_to_fetch * np.uint16.itemsize * 2
+            coordinate_offset = coordinates_to_fetch * np.dtype(np.uint16).itemsize * 2
         else:
             coordinate_offset = 0
 
@@ -379,12 +381,17 @@ def TiffWriter_new_save(self, data, **kwargs):
 
 def new_imagej_metadata(*args):
     result = __original_imagej_metadata(*args)
+    try:
+        if 'overlays' in result:
+            result['parsed_overlays'] = [
+                patchy_tifffile.Record(imagej_parse_overlay(data))
+                for data in result['overlays']
+            ]
+    except Exception as e:
+        print(e)
 
-    if 'overlays' in result:
-        result['parsed_overlays'] = [
-            patchy_tifffile.Record(imagej_parse_overlay(data))
-            for data in result['overlays']
-        ]
+        import traceback
+        traceback.print_exc()
 
     return result
 
