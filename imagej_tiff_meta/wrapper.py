@@ -282,11 +282,23 @@ def imagej_create_roi(points, name=None, c=0, z=0, t=0, index=None):
     points[:, 0] -= left
     points[:, 1] -= top
 
+    sub_pixel_resolution = False
+
+    if points.dtype == np.float32 or points.dtype == np.float64:
+        sub_pixel_resolution = True
+
     encoded_data = points.astype(np.dtype(np.int16).newbyteorder('>')).tobytes(order='F')
 
     encoded_data_size = len(encoded_data)
 
-    header = new_record(IMAGEJ_ROI_HEADER)
+    if sub_pixel_resolution:
+        points[:, 0] += left
+        points[:, 1] += top
+        sub_pixel_data = points.astype(np.dtype(np.float32).newbyteorder('>')).tobytes(order='F')
+        encoded_data += sub_pixel_data
+        encoded_data_size += len(sub_pixel_data)
+
+    header = new_record(IMAGEJ_ROI_HEADER) if not sub_pixel_resolution else new_record(IMAGEJ_ROI_HEADER_SUB_PIXEL)
 
     header._iout = b'I', b'o', b'u', b't'
 
@@ -300,6 +312,10 @@ def imagej_create_roi(points, name=None, c=0, z=0, t=0, index=None):
     header.n_coordinates = len(points)
 
     header.options = 40
+
+    if sub_pixel_resolution:
+        header.options |= CONST_IJ_OPT_SUB_PIXEL_RESOLUTION
+
     header.position = t + 1
     header.header2_offset = header.itemsize + encoded_data_size
 
