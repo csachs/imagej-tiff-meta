@@ -174,10 +174,9 @@ IMAGEJ_SUPPORTED_OVERLAYS = {
 
 
 def shape_array_to_coordinates(shape_array):
+    results = []
     result = []
     n = 0
-
-    jump = [float('nan'), float('nan')]
 
     last_moveto = 0
 
@@ -185,7 +184,8 @@ def shape_array_to_coordinates(shape_array):
         op = int(shape_array[n])
         if op == CONST_PATH_ITERATOR_SEG_MOVETO:
             if n > 0:
-                result.append(jump)
+                results.append(np.array(result))
+                result = []
             result.append([shape_array[n + 1], shape_array[n + 2]])
             last_moveto = len(result)
             n += 3
@@ -198,7 +198,8 @@ def shape_array_to_coordinates(shape_array):
         elif op == CONST_PATH_ITERATOR_SEG_QUADTO or op == CONST_PATH_ITERATOR_SEG_CUBICTO:
             raise RuntimeError("Unsupported PathIterator commands in ShapeRoi")
 
-    return np.array(result)
+    results.append(np.array(result))
+    return results
 
 
 def imagej_parse_overlay(data):
@@ -247,6 +248,8 @@ def imagej_parse_overlay(data):
             order='F'
         ).copy()
 
+        overlay['multi_coordinates'] = [overlay['coordinates'].copy()]
+
     elif header.roi_type == CONST_IJ_RECT and header.shape_roi_size > 0:
         # composite / shape ROI ... not pretty to parse
         shape_array = np.ndarray(
@@ -258,8 +261,20 @@ def imagej_parse_overlay(data):
                    ]
         ).copy()
 
-        overlay['coordinates'] = shape_array_to_coordinates(shape_array)
-        overlay['coordinates'] -= [header.left, header.top]
+        overlay['multi_coordinates'] = shape_array_to_coordinates(shape_array)
+
+        for coords in overlay['multi_coordinates']:
+            coords -= [header.left, header.top]
+
+        overlay['coordinates'] = next(
+            iter(
+                sorted(
+                    overlay['multi_coordinates'],
+                    key=lambda coords: len(coords),
+                    reverse=True
+                )
+            )
+        )
 
     for to_insert in [header, header2]:
         for key in to_insert.dtype.names:
