@@ -394,20 +394,21 @@ def TiffWriter_add_roi(self, points, name=None, c=0, z=0, t=0):
 
 def TiffWriter_new_save(self, data, **kwargs):
     if self._ijm_first_written or len(self._ijm_roi_data) == 0:
-        return self.__original_save(data)
+        return self.__original_save(data, **kwargs)
 
     meta_data, byte_counts = imagej_prepare_metadata(self._ijm_roi_data)
 
     self._ijm_first_written = True
 
-    return self.__original_save(
-        data,
-        extratags=[
-            (50838, 'I', len(byte_counts), byte_counts, True),  # byte counts
-            (50839, 'B', len(meta_data), np.frombuffer(meta_data, dtype=np.uint8), True),  # meta data
-            # (34122, 'I', 1, [self._ijm_frames], True)  # meta data
-            ]
-    )
+    extratags = [
+        (50838, 'I', len(byte_counts), byte_counts, True),  # byte counts
+        (50839, 'B', len(meta_data), np.frombuffer(meta_data, dtype=np.uint8), True),  # meta data
+        # (34122, 'I', 1, [self._ijm_frames], True)  # meta data
+    ]
+
+    kwargs['extratags'] = kwargs.get('extratags', []) + extratags
+
+    return self.__original_save(data, **kwargs)
 
 
 def new_imagej_metadata(*args):
