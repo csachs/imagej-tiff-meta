@@ -382,7 +382,7 @@ def TiffWriter___init__(self, filename):
     self._ijm_first_written = False
 
 
-def TiffWriter_add_roi(self, points, name=None, c=0, z=0, t=0):
+def TiffWriter_add_roi(self, points, name=None, c=-1, z=-1, t=-1, position=-1):
     index = None
     if name is None:
         if t not in self._ijm_rois_per_frame:
@@ -390,7 +390,7 @@ def TiffWriter_add_roi(self, points, name=None, c=0, z=0, t=0):
         self._ijm_rois_per_frame[t] += 1
         index = self._ijm_rois_per_frame[t]
 
-    self._ijm_roi_data.append(imagej_create_roi(points, name=name, c=c, z=z, t=t, index=index))
+    self._ijm_roi_data.append(imagej_create_roi(points, name=name, c=c, z=z, t=t, position=position, index=index))
 
 
 def TiffWriter_new_save(self, data, **kwargs):
