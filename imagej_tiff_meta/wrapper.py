@@ -285,7 +285,7 @@ def imagej_parse_overlay(data):
     return overlay
 
 
-def imagej_create_roi(points, name=None, c=0, z=0, t=0, index=None):
+def imagej_create_roi(points, name=None, c=-1, z=-1, t=-1, position=-1, index=None):
     if name is None:
         if index is None:
             name = 'F%02d-%x' % (t+1, np.random.randint(0, 2**32 - 1),)
@@ -331,16 +331,17 @@ def imagej_create_roi(points, name=None, c=0, z=0, t=0, index=None):
     if sub_pixel_resolution:
         header.options |= CONST_IJ_OPT_SUB_PIXEL_RESOLUTION
 
-    header.position = t + 1
+    header.position = position + 1
     header.header2_offset = header.itemsize + encoded_data_size
 
     header2 = new_record(IMAGEJ_ROI_HEADER2)
 
-    # header.position is enough, otherwise it will not work as intended
+    # either: position if only time series
+    # or position 0 and c / z / t if hyperstack
 
-    # header2.c = c + 1
-    # header2.z = z + 1
-    # header2.t = t + 1
+    header2.c = c + 1
+    header2.z = z + 1
+    header2.t = t + 1
 
     header2.name_offset = header.header2_offset + header2.itemsize
     header2.name_length = len(name)
