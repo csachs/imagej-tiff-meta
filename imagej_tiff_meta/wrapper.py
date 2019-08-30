@@ -1,5 +1,5 @@
 # encoding: utf-8
-# Copyright (c) 2017, Christian C. Sachs
+# Copyright (c) 2017-2019, Christian C. Sachs
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -155,11 +155,40 @@ IMAGEJ_META_HEADER = [
 IJM_ROI_VERSION = 226
 
 
+def add_byteorder(dtype, byteorder):
+    return [
+        (name, byteorder + inner_dtype)
+        for name, inner_dtype
+        in dtype
+    ]
+
+
+IMAGEJ_ROI_HEADER, IMAGEJ_ROI_HEADER_SUB_PIXEL, IMAGEJ_ROI_HEADER2, IMAGEJ_META_HEADER = \
+    add_byteorder(IMAGEJ_ROI_HEADER, '>'), add_byteorder(IMAGEJ_ROI_HEADER_SUB_PIXEL, '>'), \
+    add_byteorder(IMAGEJ_ROI_HEADER2, '>'), add_byteorder(IMAGEJ_META_HEADER, '>')
+
+IMAGEJ_ROI_HEADER, IMAGEJ_ROI_HEADER_SUB_PIXEL, IMAGEJ_ROI_HEADER2, IMAGEJ_META_HEADER = \
+    np.dtype(IMAGEJ_ROI_HEADER), np.dtype(IMAGEJ_ROI_HEADER_SUB_PIXEL), \
+    np.dtype(IMAGEJ_ROI_HEADER2), np.dtype(IMAGEJ_META_HEADER)
+
+
 def new_record(dtype, data=None, offset=0):
-    tmp = np.recarray(shape=(1,), dtype=dtype, aligned=False, buf=data, offset=offset).newbyteorder('>')[0]
+    tmp = np.recarray(shape=(1,), dtype=dtype, aligned=False, buf=data, offset=offset)[0]
     if data is None:
         tmp.fill(0)  # recarray does not initialize empty memory! that's pretty scary
     return tmp
+
+
+class dict_with_getattr(dict):
+    def __getattribute__(self, item):
+        try:
+            return super(dict, self).__getattribute__(item)
+        except AttributeError:
+            return self[item]
+
+
+def to_fast_plain(record):
+    return dict_with_getattr({k: v for k, v in zip(record.dtype.names, record.tolist())})
 
 
 IMAGEJ_SUPPORTED_OVERLAYS = {
@@ -202,11 +231,12 @@ def shape_array_to_coordinates(shape_array):
     return results
 
 
-def imagej_parse_overlay(data):
-    header = new_record(IMAGEJ_ROI_HEADER, data=data)
-    headerf = new_record(IMAGEJ_ROI_HEADER_SUB_PIXEL, data=data)
+def imagej_parse_overlay(data, overlay=None):
+    if overlay is None:
+        overlay = {}
 
-    header2 = new_record(IMAGEJ_ROI_HEADER2, data=data, offset=header.header2_offset)
+    header = to_fast_plain(new_record(IMAGEJ_ROI_HEADER, data=data))
+    header2 = to_fast_plain(new_record(IMAGEJ_ROI_HEADER2, data=data, offset=header.header2_offset))
 
     if header2.name_offset > 0:
         name = str(data[header2.name_offset:header2.name_offset + header2.name_length * 2], 'utf-16be')
@@ -219,14 +249,14 @@ def imagej_parse_overlay(data):
     sub_pixel_resolution = False
 
     if sub_pixel_resolution:
-        header = headerf
+        header_float = to_fast_plain(new_record(IMAGEJ_ROI_HEADER_SUB_PIXEL, data=data))
+        header = header_float
 
-    overlay = dict(
-        name=name,
-        coordinates=None,
-        sub_pixel_resolution=sub_pixel_resolution,
-        draw_offset=draw_offset,
-    )
+    overlay['name'] = name
+    overlay['coordinates'] = None
+    overlay['multi_coordinates'] = None
+    overlay['sub_pixel_resolution'] = sub_pixel_resolution
+    overlay['draw_offset'] = draw_offset
 
     if header.roi_type in IMAGEJ_SUPPORTED_OVERLAYS:
         dtype_to_fetch = np.dtype(np.float32) if sub_pixel_resolution else np.dtype(np.int16)
@@ -241,10 +271,8 @@ def imagej_parse_overlay(data):
         overlay['coordinates'] = np.ndarray(
             shape=(coordinates_to_fetch, 2),
             dtype=dtype_to_fetch.newbyteorder('>'),
-            buffer=data[
-                   header.itemsize + coordinate_offset:
-                   header.itemsize + coordinate_offset + 2 * dtype_to_fetch.itemsize * coordinates_to_fetch
-                   ],
+            buffer=data,
+            offset=IMAGEJ_ROI_HEADER.itemsize + coordinate_offset,
             order='F'
         ).copy()
 
@@ -255,10 +283,8 @@ def imagej_parse_overlay(data):
         shape_array = np.ndarray(
             shape=header.shape_roi_size,
             dtype=np.dtype(np.float32).newbyteorder('>'),
-            buffer=data[
-                   header.itemsize:
-                   header.itemsize + np.dtype(np.float32).itemsize * header.shape_roi_size
-                   ]
+            buffer=data,
+            offset=IMAGEJ_ROI_HEADER.itemsize
         ).copy()
 
         overlay['multi_coordinates'] = shape_array_to_coordinates(shape_array)
@@ -270,17 +296,18 @@ def imagej_parse_overlay(data):
             iter(
                 sorted(
                     overlay['multi_coordinates'],
-                    key=lambda coords: len(coords),
+                    key=lambda coords_: len(coords_),
                     reverse=True
                 )
             )
         )
 
-    for to_insert in [header, header2]:
-        for key in to_insert.dtype.names:
-            if key[0] == '_':
-                continue
-            overlay[key] = np.asscalar(getattr(to_insert, key))
+    overlay.update(header)
+    overlay.update(header2)
+
+    del overlay['_iout']
+    del overlay['_pad_byte']
+    del overlay['_nil']
 
     return overlay
 
@@ -416,9 +443,12 @@ def new_imagej_metadata(*args):
     result = __original_imagej_metadata(*args)
     try:
         if 'overlays' in result:
+            overlays = result['overlays']
+            if not isinstance(overlays, list):
+                overlays = [overlays]
             result['parsed_overlays'] = [
-                patchy_tifffile.Record(imagej_parse_overlay(data))
-                for data in result['overlays']
+                imagej_parse_overlay(data, overlay=patchy_tifffile.Record())
+                for data in overlays
             ]
     except Exception as e:
         print(e)
