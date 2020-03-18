@@ -1,11 +1,16 @@
+General Information (2020-03-18)
+================================
+
+Christoph Gohlke has created the package `roifile <https://github.com/cgohlke/roifile>`_ after discussions in `issue \#1 <https://github.com/csachs/imagej-tiff-meta/issues/1>`_. I would suggest using ``roifile``.
+
 imagej-tiff-meta
 ================
 
 Experimental support to read and write overlay (ROI) information from ImageJ/Fiji TIFFs.
 
-Monkey patches Christoph Gohlke's `tifffile.py` (included).
+Monkey patches Christoph Gohlke's ``tifffile.py`` (included).
 
-BSD licensed like `tifffile.py`.
+BSD licensed like ``tifffile.py``.
 
 Experimental and subject to change without notice.
 
